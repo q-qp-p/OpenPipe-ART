@@ -7,7 +7,10 @@ import pytest
 from transformers.tokenization_utils_base import BatchEncoding
 
 import art
-from art.preprocessing.tokenize import tokenize_sft_batch, tokenize_trajectory
+from art.preprocessing.tokenize import (
+    tokenize_sft_batch,
+    tokenize_trajectory,
+)
 from art.trajectories import History, Trajectory
 from art.types import MessagesAndChoices
 
@@ -176,8 +179,23 @@ def test_tokenize_sft_batch_accepts_batchencoding_chat_template_output(
     assert batch.trajectory_tensors[0]["attention_mask"].tolist() == [
         [1] * len(expected_ids)
     ]
+    assert batch.num_dropped_trajectories == 0
     assert batch.num_tokens == len(expected_ids)
     assert batch.num_trainable_tokens == len(expected_ids)
+
+    dropped_batch = tokenize_sft_batch(
+        trajectory_batch=[trajectory],
+        learning_rate=1e-5,
+        tokenizer=tokenizer,  # type: ignore[arg-type]
+        instruction_part="<user>",
+        response_part="<assistant>",
+        max_seq_length=len(expected_ids) - 1,
+    )
+    assert dropped_batch.trajectory_tensors == []
+    assert dropped_batch.num_trajectories == 0
+    assert dropped_batch.num_tokens == 0
+    assert dropped_batch.num_trainable_tokens == 0
+    assert dropped_batch.num_dropped_trajectories == 1
 
 
 def test_tokenize_trajectory_normalizes_mapping_tool_arguments_for_chat_template() -> (
