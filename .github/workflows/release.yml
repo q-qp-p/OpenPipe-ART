@@ -4,8 +4,19 @@ on:
   pull_request:
     types: [closed]
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish, without the leading v"
+        required: true
+        type: string
+      artifact_run_id:
+        description: "Workflow run ID containing the python-distributions artifact"
+        required: true
+        type: string
 
 permissions:
+  actions: read
   contents: write
   id-token: write
 
@@ -138,6 +149,26 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release upload v${{ needs.build-package.outputs.version }} dist/*
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  manual-pypi-publish:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Download package artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: python-distributions
+          path: dist
+          run-id: ${{ inputs.artifact_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Verify package version
+        run: |
+          test -f "dist/openpipe_art-${{ inputs.version }}-py3-none-any.whl"
+          test -f "dist/openpipe_art-${{ inputs.version }}.tar.gz"
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
