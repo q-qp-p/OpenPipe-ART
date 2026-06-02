@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 import os
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, Literal
 import uuid
 
 import httpx
@@ -306,8 +306,29 @@ def _get_default_client(client: TauBenchClient | None = None) -> TauBenchClient:
 
 async def get_scenarios(
     *,
-    domain: str | None = None,
-    split: str | None = None,
+    domain: (
+        Literal[
+            "banking_knowledge",
+            "retail",
+            "airline",
+            "telecom",
+            "telecom-workflow",
+            "mock",
+        ]
+        | str
+        | None
+    ) = None,
+    split: (
+        Literal[
+            "base",
+            "train",
+            "test",
+            "small",
+            "full",
+        ]
+        | str
+        | None
+    ) = None,
     client: TauBenchClient | None = None,
 ) -> list[Scenario]:
     return await _get_default_client(client).get_scenarios(domain=domain, split=split)
