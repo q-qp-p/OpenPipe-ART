@@ -138,6 +138,7 @@ class TrainStepResult(BaseModel):
 
     reduced_loss: torch.Tensor
     probs_corr: float
+    kl_policy_ref: float | None = None
     new_logprobs: list[torch.Tensor] | None = None
     update_successful: bool
     grad_norm: float
@@ -561,14 +562,15 @@ def run_megatron_rl_job(
 
             if runtime.rank == 0:
                 with open(job.log_path, "a+", encoding="utf-8") as log_file:
-                    log_msg = json.dumps(
-                        {
-                            "loss": step_result.reduced_loss.item(),
-                            "grad_norm": step_result.grad_norm,
-                            "probs_corr": step_result.probs_corr,
-                            TRAIN_GRADIENT_STEPS_KEY: num_steps,
-                        }
-                    )
+                    metrics = {
+                        "loss": step_result.reduced_loss.item(),
+                        "grad_norm": step_result.grad_norm,
+                        "probs_corr": step_result.probs_corr,
+                        TRAIN_GRADIENT_STEPS_KEY: num_steps,
+                    }
+                    if step_result.kl_policy_ref is not None:
+                        metrics["kl_policy_ref"] = step_result.kl_policy_ref
+                    log_msg = json.dumps(metrics)
                     print("Logging", log_msg)
                     log_file.write(log_msg + "\n")
 
@@ -1410,6 +1412,8 @@ def run_training_step(
     raw_loss_sum: torch.Tensor | None = None
     token_count = _local_trainable_token_count_tensor(micro_inputs, device=device)
     probs_corr_sum = 0.0
+    kl_policy_ref_sum = 0.0
+    kl_policy_ref_count = 0
     new_logprobs_list: list[torch.Tensor] = []
 
     for micro_order, micro in enumerate(micro_inputs):
@@ -1469,6 +1473,9 @@ def run_training_step(
             )
         micro_loss.backward()
         probs_corr_sum += float(loss_info.probs_corr.item())
+        if loss_info.kl_policy_ref is not None:
+            kl_policy_ref_sum += float(loss_info.kl_policy_ref.item())
+            kl_policy_ref_count += 1
         detached_micro_loss = micro_loss.detach()
         if raw_loss_sum is None:
             raw_loss_sum = detached_micro_loss
@@ -1508,6 +1515,11 @@ def run_training_step(
     return TrainStepResult(
         reduced_loss=reduced_loss,
         probs_corr=probs_corr_sum / micro_count,
+        kl_policy_ref=(
+            kl_policy_ref_sum / kl_policy_ref_count
+            if kl_policy_ref_count > 0
+            else None
+        ),
         new_logprobs=new_logprobs_list,
         update_successful=update_successful,
         grad_norm=grad_norm,
