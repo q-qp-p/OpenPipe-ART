@@ -9,7 +9,7 @@ import shutil
 import socket
 import time
 from types import TracebackType
-from typing import AsyncIterator, Iterable, Literal, cast
+from typing import Any, AsyncIterator, Iterable, Literal, cast
 import warnings
 
 logger = logging.getLogger(__name__)
@@ -147,6 +147,7 @@ class LocalBackend(Backend):
         in_process: bool = False,
         path: str | None = None,
         gpu_cost_per_hour_usd: float | None = None,
+        enable_expert_replay: bool = True,
     ) -> None:
         """
         Initializes a local, directory-based Backend interface at the given path.
@@ -162,12 +163,15 @@ class LocalBackend(Backend):
                 automatic `costs/gpu` accounting on train steps. When unset,
                 ART auto-detects supported GPU types (H200 at $3/hr today) and
                 skips GPU cost logging for unknown devices instead of guessing.
+            enable_expert_replay: For supported MoE Megatron training, capture
+                vLLM routed experts and replay them in Megatron. Defaults to True.
         """
         self._in_process = in_process
         self._path = path or get_default_art_path()
         self._gpu_cost_per_hour_usd = (
             float(gpu_cost_per_hour_usd) if gpu_cost_per_hour_usd is not None else None
         )
+        self._enable_expert_replay = enable_expert_replay
         os.makedirs(self._path, exist_ok=True)
 
         # Other initialization
@@ -181,6 +185,27 @@ class LocalBackend(Backend):
         self._default_chat_template_tool_schema_format: ChatTemplateToolSchemaFormat = (
             "default"
         )
+
+    def _model_uses_expert_replay(self, model: AnyTrainableModel) -> bool:
+        if not self._enable_expert_replay or not self._supports_result_packing:
+            return False
+        from ..megatron.model_support.registry import (
+            UnsupportedModelArchitectureError,
+            model_uses_expert_parallel,
+        )
+
+        allow_unvalidated_arch = bool(
+            (model._internal_config or dev.InternalModelConfig()).get(
+                "allow_unvalidated_arch", False
+            )
+        )
+        try:
+            return model_uses_expert_parallel(
+                model.base_model,
+                allow_unvalidated_arch=allow_unvalidated_arch,
+            )
+        except UnsupportedModelArchitectureError:
+            return False
 
     def supports_automatic_train_step_metrics(self) -> bool:
         return True
@@ -456,6 +481,7 @@ class LocalBackend(Backend):
         plot_tensors: bool,
         packed_sequence_length: int | None,
         logprob_calculation_chunk_size: int,
+        include_moe_routing: bool = False,
     ) -> PackedTensors | None:
         internal_config = cast(dev.InternalModelConfig, model._internal_config or {})
         tokenizer_key = _tokenizer_cache_key(model.base_model, internal_config)
@@ -548,6 +574,7 @@ class LocalBackend(Backend):
             truncate_long_results=False,
             advantage_balance=advantage_balance,
             pack_results=self._supports_result_packing,
+            include_moe_routing=include_moe_routing,
         )
         if (
             not allow_training_without_logprobs
@@ -604,6 +631,11 @@ class LocalBackend(Backend):
         config_dict: dict = dict(config or {})
         internal_config = cast(dev.InternalModelConfig, model._internal_config or {})
         _apply_configured_chat_template_server_args(config_dict, internal_config)
+        if self._model_uses_expert_replay(model):
+            engine_args = dict(config_dict.get("engine_args", {}))
+            engine_args["enable_return_routed_experts"] = True
+            engine_args["async_scheduling"] = False
+            config_dict["engine_args"] = engine_args
         server_args = dict(config_dict.get("server_args", {}))
 
         # Avoid binding collisions on busy hosts when no explicit port is provided.
@@ -851,7 +883,7 @@ class LocalBackend(Backend):
             summary,
             include_trainable_groups=True,
         )
-
+        include_moe_routing = self._model_uses_expert_replay(model)
         packed_tensors = self._get_packed_tensors(
             model,
             trajectory_groups,
@@ -865,6 +897,7 @@ class LocalBackend(Backend):
             logprob_calculation_chunk_size=dev_config.get(
                 "logprob_calculation_chunk_size", 1024
             ),
+            include_moe_routing=include_moe_routing,
         )
         if packed_tensors is None:
             print(
@@ -928,17 +961,34 @@ class LocalBackend(Backend):
         disk_packed_tensors = packed_tensors_to_dir(
             packed_tensors, f"{get_model_dir(model=model, art_path=self._path)}/tensors"
         )
-        # Note: scale_learning_rate_by_reward_std_dev is now handled by the frontend (Model.train())
-        grad_accumulation_sequences = max(
-            1, int(config.grad_accumulation_sequences or 1)
+        service_dev_config = cast(dev.TrainConfig, {**dev_config})
+        grad_accumulation_sequences = await self._resolve_grad_accumulation_sequences(
+            service,
+            config,
         )
+        if include_moe_routing:
+            from ..megatron.routing_replay import (
+                build_moe_routing_replay_bundle_from_packed_tensors,
+            )
+
+            routing_replay_dir = (
+                f"{get_model_dir(model=model, art_path=self._path)}/tensors/"
+                "moe_routing_replay"
+            )
+            build_moe_routing_replay_bundle_from_packed_tensors(
+                packed_tensors=packed_tensors,
+                global_grad_accumulation_sequences=grad_accumulation_sequences,
+            ).to_dir(routing_replay_dir)
+            service_dev_config["moe_routing_replay_path"] = routing_replay_dir
+            service_dev_config["moe_routing_replay_strict"] = True
+        # Note: scale_learning_rate_by_reward_std_dev is now handled by the frontend (Model.train())
         fallback_gradient_steps = math.ceil(
             disk_packed_tensors["num_sequences"] / grad_accumulation_sequences
         )
         pbar = tqdm.tqdm(total=fallback_gradient_steps, desc="train")
         reported_gradient_steps: int | None = None
         async for result in service.train(
-            disk_packed_tensors, config, dev_config, verbose
+            disk_packed_tensors, config, service_dev_config, verbose
         ):
             raw_num_gradient_steps = result.pop(TRAIN_GRADIENT_STEPS_KEY, None)
             if raw_num_gradient_steps is not None:
@@ -965,6 +1015,20 @@ class LocalBackend(Backend):
         # Note: Metrics logging is now handled by the frontend (Model.train())
         if verbose:
             print("_train_model complete")
+
+    async def _resolve_grad_accumulation_sequences(
+        self,
+        service: ModelService,
+        config: TrainConfig,
+    ) -> int:
+        resolver = getattr(
+            cast(Any, service),
+            "resolve_global_grad_accumulation_sequences",
+            None,
+        )
+        if callable(resolver):
+            return max(1, int(await resolver(config)))
+        return max(1, int(config.grad_accumulation_sequences or 1))
 
     # Note: _get_reward_std_dev_learning_rate_multiplier and _log_metrics
     # have been moved to the Model class (frontend)

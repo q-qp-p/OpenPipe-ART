@@ -3,7 +3,7 @@ name = "openpipe-art"
 version = "0.5.18"
 description = "The OpenPipe Agent Reinforcement Training (ART) library"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "openai>=2.14.0",
     "typer>=0.15.2",
@@ -49,13 +49,14 @@ megatron = [
     "transformer-engine==2.11.0",
     "transformer-engine-cu12==2.11.0",
     "transformer-engine-torch==2.11.0",
-    "megatron-core==0.16.0rc0",
+    "megatron-core==0.17.0",
     "pybind11>=2.13.6",
     "megatron-bridge==0.4.0rc0",
     "deep-ep==1.2.1 ; sys_platform == 'linux'",
     "causal-conv1d==1.6.1 ; sys_platform == 'linux' and platform_machine == 'x86_64' and python_full_version < '3.12'",
     "mamba-ssm==2.3.1 ; sys_platform == 'linux' and platform_machine == 'x86_64' and python_full_version < '3.12'",
     "nvidia-ml-py==13.580.82",
+    "nvidia-modelopt>=0.42.0a0 ; sys_platform != 'darwin'",
     "nvidia-resiliency-ext<0.5 ; sys_platform == 'linux'",
     "ml-dtypes>=0.5.0 ; python_full_version < '3.13'",
 ]
@@ -148,18 +149,18 @@ markers = [
 required-version = ">=0.11.7"
 override-dependencies = [
     "flashinfer-python==0.6.1",
+    "megatron-core==0.17.0",
     "numpy<2",
     "nvidia-resiliency-ext<0.5",
     "quack-kernels==0.2.5",
     "transformer-engine==2.11.0",
 ]
 exclude-dependencies = ["pynvml", "emerging-optimizers"]
-no-build-isolation-package = ["apex", "transformer-engine", "transformer-engine-cu12", "transformer-engine-torch", "megatron-core", "megatron-bridge", "deep-ep", "nv-grouped-gemm"]
+no-build-isolation-package = ["apex", "transformer-engine", "transformer-engine-cu12", "transformer-engine-torch", "megatron-bridge", "deep-ep", "nv-grouped-gemm"]
 
 [tool.uv.extra-build-dependencies]
 apex = ["torch>=2.8.0"]
 deep-ep = ["torch>=2.8.0"]
-megatron-core = ["pybind11"]
 nv-grouped-gemm = ["torch>=2.8.0"]
 transformer-engine-torch = ["torch>=2.8.0"]
 
@@ -191,7 +192,7 @@ requires-dist = [
 ]
 
 [tool.ty.environment]
-python-version = "3.11"
+python-version = "3.12"
 
 [tool.ty.rules]
 # Ignore unused-ignore-comment warnings because they vary depending on whether
