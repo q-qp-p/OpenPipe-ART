@@ -1,22 +1,26 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import torch
 from torch import nn
 
 from art.megatron import train as megatron_train
+from art.preprocessing.pack import PackedTensors
 
 
-def _packed_inputs(seq_len: int = 4) -> dict[str, torch.Tensor]:
-    return {
-        "tokens": torch.arange(seq_len, dtype=torch.long).unsqueeze(0),
-        "input_pos": torch.arange(seq_len, dtype=torch.long).unsqueeze(0),
-        "assistant_mask": torch.ones((1, seq_len), dtype=torch.bool),
-        "group_ids": torch.zeros((1, seq_len), dtype=torch.long),
-        "parent_ids": torch.zeros((1, seq_len), dtype=torch.long),
-    }
+def _packed_inputs(seq_len: int = 4) -> PackedTensors:
+    return cast(
+        PackedTensors,
+        {
+            "tokens": torch.arange(seq_len, dtype=torch.long).unsqueeze(0),
+            "input_pos": torch.arange(seq_len, dtype=torch.long).unsqueeze(0),
+            "assistant_mask": torch.ones((1, seq_len), dtype=torch.bool),
+            "group_ids": torch.zeros((1, seq_len), dtype=torch.long),
+            "parent_ids": torch.zeros((1, seq_len), dtype=torch.long),
+        },
+    )
 
 
 def test_precompute_reference_logprobs_preserves_sample_steps(monkeypatch) -> None:
@@ -58,7 +62,7 @@ def test_precompute_reference_logprobs_preserves_sample_steps(monkeypatch) -> No
     )
 
     result = megatron_train._precompute_reference_logprobs(
-        runtime=runtime,
+        runtime=cast(megatron_train.TrainingRuntime, runtime),
         packed_tensors=_packed_inputs(),
         sample_step_indices={3: 1, 0: 0},
         global_grad_accumulation_sequences=4,
