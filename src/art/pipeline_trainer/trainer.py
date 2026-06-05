@@ -408,6 +408,13 @@ class PipelineTrainer(Generic[ScenarioT, ConfigT]):
         min_step = max(0, current_step - self.max_steps_off_policy)
         return set(range(min_step, current_step + 1))
 
+    def _kl_penalty_reference_step(self, current_step: int) -> int | None:
+        if self.kl_penalty_coef <= 0.0:
+            return None
+        if self.kl_penalty_step_lag is None:
+            return 0
+        return max(0, current_step - self.kl_penalty_step_lag)
+
     async def _prune_model_adapters(self, current_step: int) -> None:
         if not hasattr(type(self.backend), "prune_model_adapters"):
             return
@@ -534,15 +541,15 @@ class PipelineTrainer(Generic[ScenarioT, ConfigT]):
                 }
                 if self.packed_sequence_length is not None:
                     train_kwargs["packed_sequence_length"] = self.packed_sequence_length
-                if self.kl_penalty_coef > 0.0:
+                kl_penalty_reference_step = self._kl_penalty_reference_step(
+                    current_step
+                )
+                if kl_penalty_reference_step is not None:
                     train_kwargs["kl_penalty_coef"] = self.kl_penalty_coef
                     train_kwargs["kl_penalty_source"] = "sample"
-                    if self.kl_penalty_step_lag is None:
-                        train_kwargs["kl_penalty_reference_step"] = 0
-                    else:
-                        train_kwargs["kl_penalty_reference_step"] = max(
-                            0, current_step - self.kl_penalty_step_lag
-                        )
+                    train_kwargs["kl_penalty_reference_step"] = (
+                        kl_penalty_reference_step
+                    )
                 result = await self.backend.train(
                     self.model,
                     batch,
@@ -1036,11 +1043,15 @@ class PipelineTrainer(Generic[ScenarioT, ConfigT]):
         return sorted(checkpoints, key=lambda checkpoint: checkpoint.step)
 
     def _protected_checkpoint_steps(self, current_step: int) -> set[int]:
-        return (
+        protected_steps = (
             {current_step}
             | set(self._checkpoint_lease_counts)
             | set(self._scheduled_eval_steps)
         )
+        kl_penalty_reference_step = self._kl_penalty_reference_step(current_step)
+        if kl_penalty_reference_step is not None:
+            protected_steps.add(kl_penalty_reference_step)
+        return protected_steps
 
     async def _run_checkpoint_retention(self, current_step: int) -> None:
         strategy = self.checkpoint_retention_strategy
