@@ -1095,7 +1095,15 @@ class PipelineTrainer(Generic[ScenarioT, ConfigT]):
         )
         kl_penalty_reference_step = self._kl_penalty_reference_step(current_step)
         if kl_penalty_reference_step is not None:
-            protected_steps.add(kl_penalty_reference_step)
+            if (
+                self.kl_penalty_step_lag is None
+                or kl_penalty_reference_step == 0
+            ):
+                protected_steps.add(kl_penalty_reference_step)
+            else:
+                protected_steps.update(
+                    range(kl_penalty_reference_step, current_step + 1)
+                )
         return protected_steps
 
     async def _run_checkpoint_retention(self, current_step: int) -> None:
