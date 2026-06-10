@@ -23,7 +23,7 @@ from art.pipeline_trainer import (
 )
 from art.pipeline_trainer.trainer import PipelineTrainer
 from art.preprocessing.tokenize import TokenizedResult
-from art.utils.output_dirs import get_model_dir
+from art.utils.output_dirs import get_model_dir, get_step_checkpoint_dir
 
 
 def _make_group(rewards: list[float]) -> TrajectoryGroup:
@@ -361,6 +361,50 @@ async def test_local_backend_train_passes_kl_penalty_source(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
+async def test_megatron_backend_defaults_kl_reference_to_step_zero(
+    tmp_path: Path,
+) -> None:
+    model = TrainableModel(
+        name="megatron-default-kl-reference",
+        project="pipeline-tests",
+        base_model="test-model",
+        base_path=str(tmp_path),
+    )
+    backend = LocalBackend(path=str(tmp_path))
+    backend._requires_explicit_packed_sequence_length = True
+    seen: dict[str, Any] = {}
+
+    async def fake_train_model(
+        _model: TrainableModel,
+        _groups: list[TrajectoryGroup],
+        _config: Any,
+        dev_config: dict[str, Any],
+        verbose: bool = False,
+    ):
+        del verbose
+        seen["dev_config"] = dev_config
+        yield {}
+
+    backend._train_model = fake_train_model  # type: ignore[method-assign]
+    backend._get_step = AsyncMock(return_value=1)  # type: ignore[method-assign]
+
+    with patch.object(model, "_get_wandb_run", return_value=None):
+        await backend.train(
+            model,
+            [_make_group([1.0])],
+            kl_penalty_coef=0.25,
+            packed_sequence_length=4096,
+            save_checkpoint=False,
+        )
+
+    expected_ref_path = get_step_checkpoint_dir(
+        get_model_dir(model=model, art_path=str(tmp_path)),
+        0,
+    )
+    assert seen["dev_config"]["kl_ref_adapter_path"] == expected_ref_path
+
+
+@pytest.mark.asyncio
 async def test_local_backend_train_maps_normalize_advantages_to_scale_rewards(
     tmp_path: Path,
 ) -> None:
@@ -692,9 +736,7 @@ def test_local_backend_get_packed_tensors_warns_and_drops_overlong_results(
             "art.local.backend.AutoTokenizer.from_pretrained",
             return_value=short_result._tokenizer,
         ),
-        patch(
-            "art.local.backend.AutoImageProcessor.from_pretrained", return_value=None
-        ),
+        patch("transformers.AutoImageProcessor.from_pretrained", return_value=None),
         patch(
             "art.local.backend.tokenize_trajectory_groups",
             return_value=iter([short_result, long_result]),

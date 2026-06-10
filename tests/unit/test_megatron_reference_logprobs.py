@@ -6,7 +6,9 @@ from typing import Any, cast
 import torch
 from torch import nn
 
+from art import types
 from art.megatron import train as megatron_train
+from art.megatron.training import microbatches as megatron_microbatches
 from art.preprocessing.pack import PackedTensors
 
 
@@ -80,6 +82,30 @@ def test_precompute_reference_logprobs_preserves_sample_steps(monkeypatch) -> No
     assert sorted(result) == [0, 3]
 
 
+def test_prepare_kl_reference_logprobs_requires_reference_path() -> None:
+    runtime = SimpleNamespace(rank=0)
+    job = SimpleNamespace(
+        config=types.TrainConfig(kl_penalty_coef=0.25),
+        experimental_config={},
+        lora_path="/tmp/current",
+    )
+
+    try:
+        megatron_train._prepare_kl_reference_logprobs(
+            runtime=cast(megatron_train.TrainingRuntime, runtime),
+            job=cast(megatron_train.MegatronTrainingJob, job),
+            adapter_model={},
+            packed_tensors=_packed_inputs(),
+            num_sequences=1,
+            num_steps=1,
+            global_grad_accumulation_sequences=1,
+        )
+    except RuntimeError as exc:
+        assert "kl_ref_adapter_path" in str(exc)
+    else:
+        raise AssertionError("Expected missing reference path to raise")
+
+
 class _ReplayController:
     def __init__(self) -> None:
         self.events: list[tuple[str, int, int | None, int | None]] = []
@@ -116,8 +142,9 @@ class _Chunk(nn.Module):
         position_ids: torch.Tensor,
         attention_mask: torch.Tensor,
         labels: torch.Tensor,
+        packed_seq_params: Any | None = None,
     ) -> torch.Tensor:
-        del input_ids, position_ids, attention_mask
+        del input_ids, position_ids, attention_mask, packed_seq_params
         self.training_modes_seen.append(self.training)
         assert self.controller.events == [
             ("set_step", 2, 5, 8),
@@ -136,9 +163,14 @@ def test_calculate_megatron_logprobs_replays_routes(monkeypatch) -> None:
     controller = _ReplayController()
     chunk = _Chunk(controller)
     monkeypatch.setattr(
+        megatron_microbatches,
+        "create_shared_prefix_state",
+        lambda **kwargs: (kwargs["group_ids"], kwargs["parent_ids"]),
+    )
+    monkeypatch.setattr(
         megatron_train,
-        "create_shared_prefix_attention_state",
-        lambda *, group_ids, parent_ids: (group_ids, parent_ids),
+        "_infer_parallel_topology",
+        lambda _model_chunks: megatron_train.ParallelTopology(),
     )
 
     logprobs = megatron_train._calculate_megatron_logprobs(

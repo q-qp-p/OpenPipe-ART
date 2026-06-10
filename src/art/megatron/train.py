@@ -1237,12 +1237,12 @@ def _prepare_kl_reference_logprobs(
         "kl_ref_adapter_path"
     )
     if ref_adapter_path is None:
-        print0(
-            runtime.rank,
-            "KL penalty is enabled but no kl_ref_adapter_path was provided; "
-            "Megatron training will skip KL.",
+        raise RuntimeError(
+            "KL penalty is enabled but no kl_ref_adapter_path was provided. "
+            "Megatron training requires an explicit reference LoRA path; pass "
+            "kl_penalty_reference_step=0 for the identity/base reference or "
+            "provide kl_ref_adapter_path."
         )
-        return None
 
     adapter_swapped = os.path.abspath(ref_adapter_path) != os.path.abspath(
         job.lora_path

@@ -838,6 +838,15 @@ class LocalBackend(Backend):
                 get_model_dir(model=model, art_path=self._path),
                 kl_penalty_reference_step,
             )
+        elif (
+            resolved_kl_ref_adapter_path is None
+            and kl_penalty_coef > 0.0
+            and self._requires_explicit_packed_sequence_length
+        ):
+            resolved_kl_ref_adapter_path = get_step_checkpoint_dir(
+                get_model_dir(model=model, art_path=self._path),
+                0,
+            )
         config, dev_config = build_rl_train_configs(
             learning_rate=learning_rate,
             advantage_balance=advantage_balance,
