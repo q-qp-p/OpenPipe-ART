@@ -964,7 +964,7 @@ def run_megatron_sft_step(
                 "sample_index list length must match number of micro inputs: "
                 f"{len(sample_index)} != {len(micro_inputs)}"
             )
-        micro_sample_indices = sample_index
+        micro_sample_indices: list[int | None] = sample_index
     else:
         assert len(micro_inputs) == 1
         micro_sample_indices = [sample_index]
@@ -989,7 +989,7 @@ def run_megatron_sft_step(
     )
 
     for chunk in model_chunks:
-        chunk.zero_grad_buffer()  # ty: ignore[call-non-callable]
+        chunk.zero_grad_buffer()  # type: ignore[call-non-callable]
 
     raw_loss_sum: torch.Tensor | None = None
     loss_inputs_for_count: list[dict[str, torch.Tensor] | PreparedSFTMicroInputs] = []
@@ -1107,7 +1107,7 @@ def run_training_step(
                 "sample_index list length must match number of micro inputs: "
                 f"{len(sample_index)} != {len(micro_inputs)}"
             )
-        micro_sample_indices = sample_index
+        micro_sample_indices: list[int | None] = sample_index
     else:
         assert len(micro_inputs) == 1
         micro_sample_indices = [sample_index]
@@ -1139,7 +1139,7 @@ def run_training_step(
         cp_lookahead_state.pending_prepared_micro = None
 
     for chunk in model_chunks:
-        chunk.zero_grad_buffer()  # ty: ignore[call-non-callable]
+        chunk.zero_grad_buffer()  # type: ignore[call-non-callable]
 
     micro_count = len(micro_inputs)
     raw_loss_sum: torch.Tensor | None = None

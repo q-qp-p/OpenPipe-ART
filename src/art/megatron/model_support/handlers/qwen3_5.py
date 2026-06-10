@@ -747,9 +747,9 @@ def _to_vllm_lora_tensors(
 ) -> tuple[dict[str, torch.Tensor], dict[str, Any]]:
     grouped = _group_art_moe_tensors(tensors)
     has_shared_experts = _has_shared_expert_lora_tensors(tensors)
+    transformed: dict[str, torch.Tensor] = {}
     if not grouped:
         has_fused_experts = any(_VLLM_MOE_KEY_RE.match(key) for key in tensors)
-        transformed: dict[str, torch.Tensor] = {}
         for key, tensor in tensors.items():
             vllm_key, tensor = _to_vllm_lora_tensor(
                 key,
@@ -761,11 +761,14 @@ def _to_vllm_lora_tensors(
                     f"Duplicate Qwen3.5 LoRA tensor after conversion: {vllm_key}"
                 )
             transformed[vllm_key] = tensor
-        return transformed, _vllm_moe_config(
-            adapter_config,
-            has_shared_experts=has_shared_experts,
-        ) if has_fused_experts else adapter_config
-    transformed: dict[str, torch.Tensor] = {}
+        return transformed, (
+            _vllm_moe_config(
+                adapter_config,
+                has_shared_experts=has_shared_experts,
+            )
+            if has_fused_experts
+            else adapter_config
+        )
     used_keys: set[str] = set()
     for prefix, experts in grouped.items():
         vllm_prefix = _to_vllm_key(prefix)
